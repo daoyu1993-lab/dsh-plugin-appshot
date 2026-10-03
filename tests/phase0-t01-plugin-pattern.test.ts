@@ -24,8 +24,12 @@ describe('T0.1 插件生命周期与服务依赖', () => {
     assert.equal(plugin.name, 'dsh-plugin-appshot')
   })
 
-  test('inject 声明 attachments / webServer / sessions / settings（主流程）', () => {
-    assert.deepEqual(plugin.inject, ['attachments', 'webServer', 'sessions', 'settings'])
+  test('inject 声明 attachments / webServer / sessions（主流程）', () => {
+    assert.deepEqual(plugin.inject, ['attachments', 'webServer', 'sessions'])
+  })
+
+  test('不再声明 settings 服务依赖（DSH 0.2.0 起该服务只认 profile 条目 id）', () => {
+    assert.equal(plugin.inject.includes('settings'), false)
   })
 
   test('导出 apply 与 dispose 生命周期函数（主流程）', () => {

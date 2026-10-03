@@ -162,6 +162,27 @@ DSH Renderer 内存在官方主题体系，插件 UI 不得硬编码颜色：
 - 引用前缀必须精确为 `--dsw-alias-*` / `--dsw-static-*` / `--dsw-font-family`；
   `--ds-*`（无 `w`）是另一组旧变量（仅 base.css 中字体/动效），不得混用。
 
+### 3.7 Settings 服务在 DSH 0.2.0 的形态变更
+
+> 核查日期：2026-10-03；证据来源：DSH Desktop 0.2.0-rc.2 安装产物
+> `app.asar/dsh/node_modules/@deepseek-ai/dsh-settings/lib/index.js` 与
+> `dsh-settings/README.zh.md`（源码级），以及两次宿主崩溃日志
+> `~/Library/Logs/DeepSeek Harness/crash-2026-10-03T02-2*-host.log`（真机）。
+
+结论：**0.1.x 的 `ctx.settings.register(ns, schema)` 在 0.2.0-rc.2 已不存在**。
+settings 服务按 profile 条目 id 暴露插件 Config 的 `.volatile()` 字段，对外是
+`describe(id, revision)` 与异步 `update(id, patch, expectedRevision)`，写入落到当前 profile 的
+Cordis patch 层。自带设置页的插件应在 `ctx.inject(['settings'], …)` 子级里用
+`configure({ auto: false }, ctx.fiber)` 注册策略，业务插件不依赖 settings 也能运行。
+
+- 旧实现 `settingsAny.update?.('appshot', patch)` 不对应任何 profile 条目 id，服务以
+  `Error: No configurable plugin entry "appshot"` 拒绝；
+- `update` 返回 Promise 且拒绝无人接管，宿主把未处理拒绝视为致命错误并退出
+  （`dsh: fatal load failure`），用户侧表现为「应用无法启动或已意外停止」弹窗并反复重启；
+- 因此 0.5.0 起插件不再声明 `settings` 依赖：配置改为自持文件
+  `$DSH_HOME/plugins/appshot/config.json`（`src/macos/config-store.ts`），
+  `/plugins/appshot/config` 端点内的解析、落盘、事件上报异常一律就地转成 HTTP 响应。
+
 ## 4. Windows Basic 已冻结接口结论
 
 | 能力 | 结论 |

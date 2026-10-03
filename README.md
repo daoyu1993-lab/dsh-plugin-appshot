@@ -28,6 +28,24 @@ npm 包为预构建产物，无需本地编译。重启后日志出现 `plugin a
 
 > 从源码安装（开发/贡献者）：在插件目录 `pnpm install && pnpm build && pnpm build:native`，然后在插件**父目录**执行 `dsh plugin --profile <name> add ./dsh-plugin-appshot`（`dsh plugin add` 的相对路径锚定调用目录）。
 
+### DSH 0.2.0（0.5.0 起）
+
+0.5.0 适配 DSH 0.2.0-rc.2：settings 服务不再提供 `register(ns, schema)`，旧版调用
+`settings.update('appshot', …)` 会以 `No configurable plugin entry "appshot"` 拒绝并**终止整个宿主进程**。
+本版本改为插件自持配置文件（`$DSH_HOME/plugins/appshot/config.json`），配置端点内的异常一律转成 HTTP 响应。
+
+本地打包与安装：
+
+```bash
+pnpm install && pnpm build                  # 依赖里已含 esbuild，无需 npx
+pnpm pack --config.ignore-scripts=true      # 跳过 Swift 原生构建时用；正常打包直接 pnpm pack
+dsh plugin --profile desktop add ./dsh-plugin-appshot-0.5.0.tgz
+```
+
+设置面板改动即时生效于当前运行的原生 Agent，并写入上面的 JSON 文件，重启后保留。
+macOS 仍需在「系统设置 → 隐私与安全性」中给 **DeepSeek Harness** 授予**屏幕录制**与**输入监控**
+（全局左右 ⌘ 监听走 `kTCCServiceListenEvent`，未授权时按键静默无响应）。
+
 ## 这是什么
 
 DSH 版的「[Codex Appshots](https://developers.openai.com/codex/appshots)」：为 DeepSeek Harness 带来全局快捷截屏上下文体验。

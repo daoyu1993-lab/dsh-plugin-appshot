@@ -11,7 +11,9 @@ import { applyMacos, disposeMacos } from './macos/index.ts'
 import { applyWindows, type WindowsPluginRuntime } from './windows/index.ts'
 
 export const name = 'dsh-plugin-appshot'
-export const inject = ['attachments', 'webServer', 'sessions', 'settings']
+// settings 服务自 DSH 0.2.0 起只按 profile 条目 id 暴露 volatile 字段，本插件改为自持配置文件，
+// 不再声明 settings 依赖（理由与证据见 src/macos/config-store.ts 头注）。
+export const inject = ['attachments', 'webServer', 'sessions']
 
 export interface PluginState {
   windows?: WindowsPluginRuntime
@@ -46,11 +48,15 @@ export function dispose(ctx?: Context) {
 }
 
 // ── 公开面（与既有导出保持一致） ─────────────────────────────────────────
+// 注意：宿主入口不再 re-export src/client.ts。客户端组件会 import react（Browser
+// 侧由 __ModuleLoader__ 提供），一旦被 esbuild 打进宿主 bundle，Node 侧解析不到
+// react 会让整个插件加载失败（ERR_MODULE_NOT_FOUND）。客户端入口见 package.json
+// 的 exports["./client"] → dist/client.js。
 export { cleanOrphanStagingFiles } from './macos/staging.ts'
 export { ingestScreenshot } from './macos/ingest.ts'
 export { createAppshotSSEHub } from './macos/sse.ts'
-export { createAppshotClient, AppshotSettingsSection } from './client.ts'
 export { createNdjsonParser } from './macos/ipc.ts'
 export { startAgent } from './macos/agent.ts'
+export { loadMacosConfig, resolveConfigStorePath, sanitizeMacosConfig, saveMacosConfig } from './macos/config-store.ts'
 export * from './shared/types.ts'
 export { applyWindows } from './windows/index.ts'

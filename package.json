@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-appshot",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "dsh-plugin-appshot — a DeepSeek Harness plugin for macOS and Windows context screenshot capture.",
   "license": "MIT",
   "author": "TaurusWood",
@@ -61,7 +61,7 @@
   },
   "scripts": {
     "prepack": "node scripts/prepack.mjs",
-    "build": "npx esbuild src/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/index.js && npx esbuild src/client.ts --bundle --platform=browser --format=cjs --external:react --external:react-dom --external:react/jsx-runtime --banner:js=\"window.__ModuleLoader__.load({ id: 'dsh-plugin-appshot', factory: (require) => { var module = { exports: {} }; var exports = module.exports;\" --footer:js=\"return module.exports; } });\" --outfile=dist/client.js",
+    "build": "node scripts/build.mjs",
     "build:native": "./native/macos/scripts/build-app.sh",
     "build:native:windows": "dotnet publish native/windows/AppshotWin.csproj -c Release -o native/windows/bin/win-x64",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -75,12 +75,13 @@
     "release": "pnpm run changelog && git add CHANGELOG.md CHANGELOG.zh-CN.md && bumpp --all --commit \"chore: release v%s\" --tag \"v%s\" --push"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.31",
     "bumpp": "^12.2.1",
     "conventional-changelog-cli": "^5.0.0",
+    "esbuild": "^0.28.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "typescript": "^5.6.0"

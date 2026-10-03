@@ -8,9 +8,9 @@ const explicitArg = process.argv[2]
 
 let testPatterns: string[] = []
 if (explicitArg === '--win' || explicitArg === '--windows' || (isWindows && !explicitArg)) {
-  testPatterns = ['tests/phase-w*.test.ts', 'tests/phase7-*.test.ts']
+  testPatterns = ['tests/phase-w*.test.ts', 'tests/phase7-*.test.ts', 'tests/phase8-*.test.ts']
 } else if (explicitArg === '--mac' || explicitArg === '--macos' || (isMac && !explicitArg)) {
-  testPatterns = ['tests/phase0-*.test.ts', 'tests/phase1-*.test.ts', 'tests/phase2-*.test.ts', 'tests/phase3-*.test.ts', 'tests/phase4-*.test.ts', 'tests/phase5-*.test.ts', 'tests/phase6-*.test.ts', 'tests/phase7-*.test.ts']
+  testPatterns = ['tests/phase0-*.test.ts', 'tests/phase1-*.test.ts', 'tests/phase2-*.test.ts', 'tests/phase3-*.test.ts', 'tests/phase4-*.test.ts', 'tests/phase5-*.test.ts', 'tests/phase6-*.test.ts', 'tests/phase7-*.test.ts', 'tests/phase8-*.test.ts']
 } else {
   testPatterns = ['tests/**/*.test.ts']
 }

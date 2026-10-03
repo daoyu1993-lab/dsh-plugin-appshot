@@ -13,6 +13,7 @@ import { cleanOrphanStagingFiles } from './staging.ts'
 import { createAppshotSSEHub, type AppshotSSEHub } from './sse.ts'
 import { ingestScreenshot } from './ingest.ts'
 import { startAgent, type AgentProcess } from './agent.ts'
+import { loadMacosConfig, resolveConfigStorePath, sanitizeMacosConfig, saveMacosConfig } from './config-store.ts'
 import type { AppshotConfig, AppshotEventCapture, ImageAttachmentRef } from '../shared/types.ts'
 
 // 镜像自 @deepseek-ai/dsh-attachment StoredImageAttachment（禁 any/@ts-ignore）
@@ -20,16 +21,10 @@ interface HostAttachmentStore {
   readImage(ref: ImageAttachmentRef): Promise<{ ref: ImageAttachmentRef; data: Uint8Array }>
 }
 
-interface HostSettingsService {
-  register(ns: string, schema: unknown, options?: { applies?: 'live' | 'restart' }): {
-    get(): AppshotConfig
-  }
-  get?(ns: string): AppshotConfig | undefined
-}
-
 // macOS 插件自持状态（Windows runtime 状态在 src/index.ts）
 let macosAgent: AgentProcess | undefined
 let macosSseHub: AppshotSSEHub | undefined
+let macosConfig: AppshotConfig | undefined
 
 function resolveAgentBinaryPath(): string {
   const currentDir = typeof __dirname !== 'undefined'
@@ -65,41 +60,10 @@ export function applyMacos(ctx: Context) {
   const sseHub = createAppshotSSEHub(ctx as unknown as Parameters<typeof createAppshotSSEHub>[0])
   macosSseHub = sseHub
 
-  // 3. 注册配置服务 (DSH Settings Seam)
-  let initialConfig: AppshotConfig | undefined
-  const settings = (ctx as unknown as { settings?: HostSettingsService }).settings
-  if (settings) {
-    try {
-      // DSH SettingsProvider.resolve() 内部执行 schema(mergeLayers(...))，
-      // 期望 schema 是可调用函数且具有 toJSON()；构造 duck-typed schemastery 对象。
-      const appshotSchema = Object.assign(
-        (val: unknown): AppshotConfig => {
-          const v = (typeof val === 'object' && val !== null ? val : {}) as Record<string, unknown>
-          return {
-            shortcutMode: (typeof v.shortcutMode === 'string'
-              ? v.shortcutMode
-              : 'dual-cmd') as AppshotConfig['shortcutMode'],
-            soundEnabled: typeof v.soundEnabled === 'boolean' ? v.soundEnabled : true,
-            animationEnabled: typeof v.animationEnabled === 'boolean' ? v.animationEnabled : true,
-          }
-        },
-        {
-          toJSON: () => ({
-            type: 'object',
-            properties: {
-              shortcutMode: { type: 'string', default: 'dual-cmd' },
-              soundEnabled: { type: 'boolean', default: true },
-              animationEnabled: { type: 'boolean', default: true },
-            },
-          }),
-        },
-      )
-      const scope = settings.register('appshot', appshotSchema, { applies: 'live' })
-      initialConfig = scope?.get()
-    } catch (err) {
-      console.warn('[dsh-plugin-appshot] settings registration skipped/warn:', err)
-    }
-  }
+  // 3. 读取插件自持配置（DSH 0.2.0 起 settings 服务只按 profile 条目 id 暴露 volatile 字段，
+  //    旧的 register/update 用法已不可用，详见 config-store.ts 头注）
+  const configStorePath = resolveConfigStorePath()
+  macosConfig = loadMacosConfig(configStorePath)
 
   // 4. 启动 Native Agent 常驻进程
   if (process.env.DSH_DISABLE_AGENT_SPAWN !== '1') {
@@ -117,8 +81,8 @@ export function applyMacos(ctx: Context) {
         onEvent: async (event) => {
           if (event.type === 'ready') {
             console.log('[dsh-plugin-appshot] native agent ready, pid:', event.pid)
-            if (initialConfig && macosAgent) {
-              macosAgent.sendConfig(initialConfig)
+            if (macosAgent !== undefined && macosConfig !== undefined) {
+              macosAgent.sendConfig(macosConfig)
             }
           } else if (event.type === 'appshot') {
             const capture = event as AppshotEventCapture
@@ -162,8 +126,8 @@ export function applyMacos(ctx: Context) {
         },
       }).then((agent) => {
         macosAgent = agent
-        if (initialConfig) {
-          agent.sendConfig(initialConfig)
+        if (macosConfig) {
+          agent.sendConfig(macosConfig)
         }
       }).catch((err) => {
         console.error('[dsh-plugin-appshot] failed to start native agent:', err)
@@ -171,36 +135,10 @@ export function applyMacos(ctx: Context) {
     }
   }
 
-  // 5. 监听配置变更事件并实时同步给 Agent
-  ctx.effect(() => {
-    const off = (ctx as unknown as { on(event: string, cb: (...args: unknown[]) => void): () => void }).on(
-      'settings/updated',
-      (ns: unknown, next: unknown) => {
-        if (ns === 'appshot' && macosAgent && next && typeof next === 'object') {
-          console.log('[dsh-plugin-appshot] settings updated, syncing to native agent:', next)
-          macosAgent.sendConfig(next as AppshotConfig)
-        }
-      },
-    )
-    return () => {
-      off?.()
-    }
-  })
-
-  // 6. 注册配置 REST 端点（供客户端浮动设置面板读写）
+  // 5. 注册配置 REST 端点（客户端设置面板的唯一读写通道，落盘见 config-store.ts）
   const webServer = (ctx as unknown as { webServer?: { register?(route: { kind: string; path: string; handler: (req: unknown, res: unknown) => void }): () => void } }).webServer
   if (typeof webServer?.register === 'function') {
-    // 当前配置快照（fallback：用 settings scope 或默认值）
-    const getConfig = (): AppshotConfig => {
-      if (settings) {
-        try {
-          return settings.get?.('appshot' as unknown as string) as AppshotConfig ?? initialConfig ?? { shortcutMode: 'dual-cmd', soundEnabled: true, animationEnabled: true }
-        } catch {
-          // ignore
-        }
-      }
-      return initialConfig ?? { shortcutMode: 'dual-cmd', soundEnabled: true, animationEnabled: true }
-    }
+    const getConfig = (): AppshotConfig => macosConfig ?? loadMacosConfig(configStorePath)
 
     webServer.register({
       kind: 'exact',
@@ -211,59 +149,55 @@ export function applyMacos(ctx: Context) {
           writeHead(status: number, headers?: Record<string, string>): void
           end(body?: string): void
         }
-
-        if (httpReq.method === 'GET') {
-          httpRes.writeHead(200, { 'Content-Type': 'application/json' })
-          httpRes.end(JSON.stringify(getConfig()))
-          return
+        const respond = (status: number, payload: unknown): void => {
+          httpRes.writeHead(status, { 'Content-Type': 'application/json' })
+          httpRes.end(JSON.stringify(payload))
         }
 
-        if (httpReq.method === 'POST') {
-          const chunks: Buffer[] = []
-          const reqNode = req as { on(event: string, cb: (data?: Buffer) => void): void }
-          reqNode.on('data', (chunk?: Buffer) => { if (chunk) chunks.push(chunk) })
-          reqNode.on('end', () => {
-            try {
-              const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as Record<string, unknown>
-              const patch: Partial<AppshotConfig> = {}
-              if (typeof body.shortcutMode === 'string') patch.shortcutMode = body.shortcutMode as AppshotConfig['shortcutMode']
-              if (typeof body.soundEnabled === 'boolean') patch.soundEnabled = body.soundEnabled
-              if (typeof body.animationEnabled === 'boolean') patch.animationEnabled = body.animationEnabled
+        // 端点内任何异常都就地转成响应：0.2.0 宿主把未处理拒绝视为致命错误并退出进程
+        try {
+          if (httpReq.method === 'GET') {
+            respond(200, getConfig())
+            return
+          }
 
-              // 合并为完整配置
-              const current = getConfig()
-              const merged: AppshotConfig = { ...current, ...patch }
-
-              // 同步给 Native Agent
-              if (macosAgent) {
-                macosAgent.sendConfig(merged)
-              }
-
-              // 尝试持久化到 DSH settings
-              if (settings) {
-                try {
-                  const settingsAny = settings as unknown as { update?(ns: string, patch: object): void }
-                  settingsAny.update?.('appshot', patch)
-                } catch {
-                  // DSH settings 可能不支持外部 update，仅同步给 Agent
+          if (httpReq.method === 'POST') {
+            const chunks: Buffer[] = []
+            const reqNode = req as { on(event: string, cb: (data?: Buffer) => void): void }
+            reqNode.on('data', (chunk?: Buffer) => { if (chunk) chunks.push(chunk) })
+            reqNode.on('end', () => {
+              try {
+                const patch = sanitizeMacosConfig(JSON.parse(Buffer.concat(chunks).toString('utf-8')) as unknown)
+                if (patch === null) {
+                  respond(400, { error: 'No valid config field in request body' })
+                  return
                 }
+                const merged: AppshotConfig = { ...getConfig(), ...patch }
+                macosConfig = merged
+                if (macosAgent !== undefined) {
+                  macosAgent.sendConfig(merged)
+                }
+                const persisted = saveMacosConfig(configStorePath, merged)
+                if (!persisted) {
+                  console.warn('[dsh-plugin-appshot] config not persisted; in-memory value stays active:', configStorePath)
+                }
+                respond(200, { ...merged, persisted })
+              } catch (err) {
+                respond(400, { error: 'Invalid JSON', detail: String(err) })
               }
+            })
+            return
+          }
 
-              // 更新本地缓存
-              initialConfig = merged
-
-              httpRes.writeHead(200, { 'Content-Type': 'application/json' })
-              httpRes.end(JSON.stringify(merged))
-            } catch (err) {
-              httpRes.writeHead(400, { 'Content-Type': 'application/json' })
-              httpRes.end(JSON.stringify({ error: 'Invalid JSON', detail: String(err) }))
-            }
-          })
-          return
+          respond(405, { error: 'Method not allowed' })
+        } catch (err) {
+          console.error('[dsh-plugin-appshot] config endpoint failed:', err)
+          try {
+            respond(500, { error: 'Config endpoint failed', detail: String(err) })
+          } catch {
+            // 连接可能已断开：不再向上抛，避免影响宿主进程
+          }
         }
-
-        httpRes.writeHead(405, { 'Content-Type': 'application/json' })
-        httpRes.end(JSON.stringify({ error: 'Method not allowed' }))
       },
     })
   }

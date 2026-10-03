@@ -2,6 +2,24 @@
 
 [English](./CHANGELOG.md) | [简体中文](./CHANGELOG.zh-CN.md)
 
+## [0.5.0](https://github.com/TaurusWood/dsh-plugin-appshot/compare/v0.4.2...v0.5.0) (2026-10-03)
+
+### Features
+
+* **dsh 0.2.0:** replace the removed `ctx.settings.register` / `settings.update` seam with a plugin-owned
+  config file at `$DSH_HOME/plugins/appshot/config.json` (`src/macos/config-store.ts`); the plugin no longer
+  declares the `settings` dependency
+
+### Bug Fixes
+
+* **host:** the `/plugins/appshot/config` endpoint now converts every failure (bad JSON, unknown fields,
+  write errors) into an HTTP response instead of letting a rejection reach the host process — on
+  DSH 0.2.0-rc.2 the old `settings.update('appshot', …)` call rejected with
+  `No configurable plugin entry "appshot"` and killed the whole host ("应用无法启动或已意外停止")
+* **bundle:** drop the `src/client.ts` re-export from the host entry so the Node bundle no longer has a bare
+  `react` import (`ERR_MODULE_NOT_FOUND` on load)
+* **build:** use the local `esbuild` devDependency instead of `npx esbuild`
+
 ## [0.4.2](https://github.com/TaurusWood/dsh-plugin-appshot/compare/v0.4.1...v0.4.2) (2026-09-28)
 
 

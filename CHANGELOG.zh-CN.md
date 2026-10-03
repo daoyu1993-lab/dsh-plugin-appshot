@@ -2,6 +2,22 @@
 
 [English](./CHANGELOG.md) | [简体中文](./CHANGELOG.zh-CN.md)
 
+## [0.5.0](https://github.com/TaurusWood/dsh-plugin-appshot/compare/v0.4.2...v0.5.0) (2026-10-03)
+
+### ✨ 新特性 (Features)
+
+* **适配 DSH 0.2.0：** 弃用已被移除的 `ctx.settings.register` / `settings.update` 接缝，配置改存插件自持文件
+  `$DSH_HOME/plugins/appshot/config.json`（`src/macos/config-store.ts`）；插件不再声明 `settings` 依赖
+
+### 🐛 问题修复 (Bug Fixes)
+
+* **宿主：** `/plugins/appshot/config` 端点把全部失败（JSON 非法、字段未知、写盘失败）就地转成 HTTP 响应，
+  不再让拒绝冒到宿主进程 —— DSH 0.2.0-rc.2 上旧代码的 `settings.update('appshot', …)` 会以
+  `No configurable plugin entry "appshot"` 拒绝，直接终止整个宿主（表现为「应用无法启动或已意外停止」）
+* **打包：** 宿主入口不再 re-export `src/client.ts`，Node bundle 里不再出现裸 `react` import（加载时
+  `ERR_MODULE_NOT_FOUND`）
+* **构建：** 改用本地 `esbuild` devDependency，不再依赖 `npx`
+
 ## [0.4.2](https://github.com/TaurusWood/dsh-plugin-appshot/compare/v0.4.1...v0.4.2) (2026-09-28)
 
 
