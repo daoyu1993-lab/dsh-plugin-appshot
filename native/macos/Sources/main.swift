@@ -847,16 +847,19 @@ func screenCaptureGlobalRect(from selection: CGRect) -> CGRect {
     return CGRect(x: selection.minX, y: primaryHeight - selection.maxY, width: selection.width, height: selection.height)
 }
 
-/// 截取目标屏上的矩形；排除本进程窗口（选区遮罩/闪光/飞入），避免把遮罩拍进图里。
-func captureRegion(screen: NSScreen, sourceRect: CGRect) throws -> CGImage {
+/// 截取目标屏上的矩形；`excluding` 为本进程窗口（选区 UI / 动画），确保它们不出现在成图里。
+func captureRegion(screen: NSScreen, sourceRect: CGRect, excluding ownWindows: [SCWindow] = []) throws -> CGImage {
     let content = try fetchShareableContent()
     let targetDisplay = displayID(of: screen)
     guard let display = content.displays.first(where: { $0.displayID == targetDisplay }) else {
         throw NSError(domain: "Appshot", code: -3, userInfo: [NSLocalizedDescriptionKey: "Target display is not shareable"])
     }
 
-    let ownWindows = content.windows.filter { $0.owningApplication?.processID == getpid() }
-    let filter = SCContentFilter(display: display, excludingWindows: ownWindows)
+    // 优先使用调用方在遮罩仍在场时抓取的排除列表（按窗口身份排除，不依赖 orderOut 时序）
+    let excluded = ownWindows.isEmpty
+        ? content.windows.filter { $0.owningApplication?.processID == getpid() }
+        : ownWindows
+    let filter = SCContentFilter(display: display, excludingWindows: excluded)
 
     let config = SCStreamConfiguration()
     config.sourceRect = sourceRect
@@ -869,6 +872,12 @@ func captureRegion(screen: NSScreen, sourceRect: CGRect) throws -> CGImage {
     return try captureWindow(filter: filter, config: config)
 }
 
+/// 抓取“本进程当前在场的窗口”快照，用于把选区 UI / 动画从成图里排除。
+func snapshotOwnWindows() -> [SCWindow] {
+    guard let content = try? fetchShareableContent() else { return [] }
+    return content.windows.filter { $0.owningApplication?.processID == getpid() }
+}
+
 /// 区域截图主流程：权限 → 截取 → 落盘 → 反馈 → 先截后唤。
 func performRegionCapture(
     selection: CGRect,
@@ -876,6 +885,7 @@ func performRegionCapture(
     outputPath: String?,
     activateAppId: String?,
     activatePid: pid_t?,
+    excluding ownWindows: [SCWindow] = [],
     appName: String = "区域截图"
 ) -> AppshotSuccessResult? {
     guard checkScreenCapturePermission() else {
@@ -889,7 +899,11 @@ func performRegionCapture(
 
     let image: CGImage
     do {
-        image = try captureRegion(screen: screen, sourceRect: regionSourceRect(selection: selection, on: screen))
+        image = try captureRegion(
+            screen: screen,
+            sourceRect: regionSourceRect(selection: selection, on: screen),
+            excluding: ownWindows
+        )
     } catch {
         outputJSON(AppshotErrorResult(code: "REGION_CAPTURE_FAILED", message: "Region capture failed: \(error.localizedDescription)"))
         return nil
@@ -919,7 +933,7 @@ func performRegionCapture(
     )
 }
 
-/// 框选遮罩视图：整屏压暗 + 拖拽选区（Esc / 右键 / 过小选区取消）。
+/// 框选叠加层：不铺蒙层，只画选框/刻度/尺寸徽标（Esc / 右键 / 过小选区取消）。
 final class RegionSelectionView: NSView {
     private var startPoint: NSPoint?
     private var currentPoint: NSPoint?
@@ -975,17 +989,32 @@ final class RegionSelectionView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.withAlphaComponent(0.32).setFill()
-        bounds.fill()
-
+        // 无整屏蒙层：屏幕保持原样，只叠加选框与提示；成图里也绝不会出现任何装饰
+        // （窗口在截取前 orderOut，并按窗口身份从 SCContentFilter 排除）。
         if let rect = selectionRect() {
-            NSColor.clear.setFill()
-            rect.fill(using: .copy) // 挖空选区：未变暗，所见即所截
-
             NSColor.controlAccentColor.setStroke()
             let border = NSBezierPath(rect: rect)
-            border.lineWidth = 1.5
+            border.lineWidth = 2
             border.stroke()
+
+            // 四角外扩刻度：对齐用，不压住选区内容
+            let tick: CGFloat = 10
+            let tickPath = NSBezierPath()
+            tickPath.lineWidth = 2.5
+            let corners: [(CGPoint, [CGPoint])] = [
+                (CGPoint(x: rect.minX, y: rect.minY), [CGPoint(x: rect.minX - tick, y: rect.minY), CGPoint(x: rect.minX, y: rect.minY - tick)]),
+                (CGPoint(x: rect.maxX, y: rect.minY), [CGPoint(x: rect.maxX + tick, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY - tick)]),
+                (CGPoint(x: rect.minX, y: rect.maxY), [CGPoint(x: rect.minX - tick, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY + tick)]),
+                (CGPoint(x: rect.maxX, y: rect.maxY), [CGPoint(x: rect.maxX + tick, y: rect.maxY), CGPoint(x: rect.maxX, y: rect.maxY + tick)]),
+            ]
+            for (corner, arms) in corners {
+                tickPath.move(to: corner)
+                for arm in arms {
+                    tickPath.move(to: corner)
+                    tickPath.line(to: arm)
+                }
+            }
+            tickPath.stroke()
 
             let label = "\(Int(rect.width.rounded())) × \(Int(rect.height.rounded()))"
             let attributes: [NSAttributedString.Key: Any] = [
@@ -993,17 +1022,21 @@ final class RegionSelectionView: NSView {
                 .foregroundColor: NSColor.white,
             ]
             let labelSize = (label as NSString).size(withAttributes: attributes)
-            let badge = CGRect(
-                x: rect.minX,
-                y: max(rect.minY - labelSize.height - 10, 8),
-                width: labelSize.width + 12,
-                height: labelSize.height + 4
+            let badgeOrigin = CGPoint(
+                x: min(max(rect.minX, bounds.minX + 4), bounds.maxX - labelSize.width - 16),
+                y: rect.maxY + 8 + labelSize.height <= bounds.maxY ? rect.maxY + 8 : max(rect.minY - labelSize.height - 12, 4)
             )
-            NSColor.black.withAlphaComponent(0.7).setFill()
+            let badge = CGRect(x: badgeOrigin.x, y: badgeOrigin.y, width: labelSize.width + 12, height: labelSize.height + 4)
+            NSColor.black.withAlphaComponent(0.72).setFill()
             NSBezierPath(roundedRect: badge, xRadius: 4, yRadius: 4).fill()
             (label as NSString).draw(at: CGPoint(x: badge.minX + 6, y: badge.minY + 2), withAttributes: attributes)
         }
 
+        drawHintPill()
+    }
+
+    /// 顶部提示胶囊：单独的小浮层，不铺满屏幕。
+    private func drawHintPill() {
         let hint = "拖动选择截图区域 · Esc 取消"
         let hintAttributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 14, weight: .medium),
@@ -1011,7 +1044,7 @@ final class RegionSelectionView: NSView {
         ]
         let hintSize = (hint as NSString).size(withAttributes: hintAttributes)
         let hintOrigin = CGPoint(x: bounds.midX - hintSize.width / 2, y: bounds.maxY - hintSize.height - 60)
-        NSColor.black.withAlphaComponent(0.6).setFill()
+        NSColor.black.withAlphaComponent(0.72).setFill()
         NSBezierPath(
             roundedRect: CGRect(
                 x: hintOrigin.x - 14,
@@ -1024,6 +1057,13 @@ final class RegionSelectionView: NSView {
         ).fill()
         (hint as NSString).draw(at: hintOrigin, withAttributes: hintAttributes)
     }
+
+    /// 测试钩子：直接把选区画出来（配合 APPSHOT_REGION_PRESET 验证真实截取路径）。
+    func applyPresetSelection(_ rect: CGRect) {
+        startPoint = CGPoint(x: rect.minX, y: rect.minY)
+        currentPoint = CGPoint(x: rect.maxX, y: rect.maxY)
+        needsDisplay = true
+    }
 }
 
 /// 区域截图控制器（单实例，⌘⇧A 触发）。
@@ -1035,6 +1075,9 @@ final class RegionCaptureController {
     private var activateAppId: String?
     private var activatePid: pid_t?
     private var isActive = false
+
+    /// CLI `--region --output <path>` 指定的落盘路径。
+    var outputPathOverride: String?
 
     private init() {}
 
@@ -1073,14 +1116,28 @@ final class RegionCaptureController {
         window.makeFirstResponder(view)
         NSApp.activate(ignoringOtherApps: true)
         overlayWindow = window
+
+        // 测试钩子（不影响生产路径）：APPSHOT_REGION_PRESET=x,y,w,h 时直接画出该选区并自动完成，
+        // 用于自动化验证「选区 UI 在场 → 截取」这条真实链路不会把 UI 带进成图。
+        if let preset = ProcessInfo.processInfo.environment["APPSHOT_REGION_PRESET"],
+           let rect = parseRegionPreset(preset) {
+            view.applyPresetSelection(rect)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.finish(viewRect: rect)
+            }
+        }
     }
 
     private func finish(viewRect: CGRect?) {
         guard isActive, let screen = activeScreen else { return }
         isActive = false
+        activeScreen = nil
+
+        // 先在选区 UI 仍在场时抓一份“本进程窗口”清单：按窗口身份排除，不依赖 orderOut 的提交时序
+        let excludedWindows = snapshotOwnWindows()
+
         overlayWindow?.orderOut(nil)
         overlayWindow = nil
-        activeScreen = nil
 
         guard let viewRect = viewRect else {
             if regionCLIExitWhenDone { exit(0) }
@@ -1095,21 +1152,30 @@ final class RegionCaptureController {
         )
         let appId = activateAppId
         let appPid = activatePid
+        let outputPath = outputPathOverride
 
-        // 遮罩先真正离场再截取（同时也在 SCContentFilter 排除列表里，双保险）
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        // 等窗口服务器提交“UI 已离场”后再截取；排除列表是兜底，两条都保证成图干净
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
             if let result = performRegionCapture(
                 selection: selection,
                 on: screen,
-                outputPath: nil,
+                outputPath: outputPath,
                 activateAppId: appId,
-                activatePid: appPid
+                activatePid: appPid,
+                excluding: excludedWindows
             ) {
                 outputJSON(result)
             }
             if regionCLIExitWhenDone { exit(0) }
         }
     }
+}
+
+/// 解析 APPSHOT_REGION_PRESET=「x,y,width,height」（view 坐标，左下原点）。
+func parseRegionPreset(_ raw: String) -> CGRect? {
+    let parts = raw.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+    guard parts.count == 4, parts[2] >= 1, parts[3] >= 1 else { return nil }
+    return CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
 }
 
 // MARK: - 全局热键 ⌘⇧A（Carbon RegisterEventHotKey，无需辅助功能授权）
@@ -1312,6 +1378,7 @@ struct AppshotCLI {
         // 区域截图（交互框选）：从命令行触发与守护进程相同的遮罩流程
         if args.contains("--region") {
             regionCLIExitWhenDone = true
+            RegionCaptureController.shared.outputPathOverride = outputPath
             RegionCaptureController.shared.begin(activateAppId: activateAppId, activatePid: activatePid)
             NSApp.run()
             exit(0)

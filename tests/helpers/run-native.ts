@@ -26,10 +26,13 @@ export interface NativeRunResult {
 
 export function runNative(
   args: string[],
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; env?: Record<string, string> } = {},
 ): Promise<NativeRunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(NATIVE_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(NATIVE_BIN, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, ...(opts.env ?? {}) },
+    })
     let stdout = ''
     let stderr = ''
     child.stdout.setEncoding('utf8')

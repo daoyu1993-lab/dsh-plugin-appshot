@@ -2,6 +2,17 @@
 
 [English](./CHANGELOG.md) | [简体中文](./CHANGELOG.zh-CN.md)
 
+## [0.6.1](https://github.com/TaurusWood/dsh-plugin-appshot/compare/v0.6.0...v0.6.1) (2026-10-03)
+
+### Bug Fixes
+
+* **macos:** drop the full-screen dim mask from region selection — the screen now stays untouched and only a
+  selection border, corner ticks, a live size badge and a top hint pill are drawn on the overlay
+* **macos:** exclude our own windows from the region capture by identity (snapshot taken while the overlay is
+  still on screen, passed into `SCContentFilter(display:excludingWindows:)`) instead of relying on the
+  `orderOut` commit timing, so no part of the selection UI can ever land in the shot; settle delay 50 ms → 120 ms
+* **tests:** cover the real interactive path headlessly via the `APPSHOT_REGION_PRESET` hook
+
 ## [0.6.0](https://github.com/TaurusWood/dsh-plugin-appshot/compare/v0.5.0...v0.6.0) (2026-10-03)
 
 ### Features

@@ -82,8 +82,37 @@ test('--region-rect 过小选区返回 REGION_TOO_SMALL（常规边界）', { sk
   assert.equal(parsed.code, 'REGION_TOO_SMALL')
 })
 
+test('选区 UI 在场时完成截取且成图规格正确（主流程，preset 钩子）', { skip: nativeGate }, async () => {
+  const dir = await makeTempDir('dsh-appshot-region-ui-')
+  const output = join(dir, 'with-ui.png')
+  try {
+    // APPSHOT_REGION_PRESET 让真实交互路径（选区窗口在场 → 截取）可被无头驱动
+    const result = await runNative(['--region', '--output', output], {
+      timeoutMs: 20_000,
+      env: { APPSHOT_REGION_PRESET: '100,100,400,300' },
+    })
+    assert.equal(result.code, 0, `stderr: ${result.stderr.trim().slice(0, 300)}`)
+    const parsed = parseFirstJsonLine(result.stdout) as NativeSuccessResult
+    assert.equal(parsed.ok, true)
+    assert.equal(parsed.captureKind, 'region')
+    assert.equal(parsed.imagePath, output)
+    assert.ok([400, 800].includes(parsed.width), `宽度应为 400 或 800，实际 ${parsed.width}`)
+    assert.ok([300, 600].includes(parsed.height), `高度应为 300 或 600，实际 ${parsed.height}`)
+    assert.equal(await fileExists(output), true, 'PNG 应落盘')
+    const size = pngSize(await readFile(output))
+    assert.equal(size.width, parsed.width, 'PNG 实际像素宽应与 JSON 一致')
+    assert.equal(size.height, parsed.height, 'PNG 实际像素高应与 JSON 一致')
+  } finally {
+    await removeDir(dir)
+  }
+})
+
 test('手动：⌘⇧A 框选后自动挂入输入框（人工验收）', {
-  skip: '人工验收：在任意应用按 ⌘⇧A → 整屏压暗、拖动框选 → 松开后截图落盘、DSH 唤起、图片出现在输入框；Esc / 右键 / 过小选区应取消且不产生附件',
+  skip: '人工验收：按 ⌘⇧A → 屏幕保持原样，仅出现选框/尺寸徽标/顶部提示条（无任何蒙层）→ 拖动选区 → 松开后截图落盘、DSH 唤起、图片出现在输入框；Esc / 右键 / 过小选区应取消且不产生附件',
+}, () => {})
+
+test('手动：成图不含选区 UI（亮度对照，人工验收）', {
+  skip: '人工验收：`APPSHOT_REGION_PRESET=100,100,400,300 appshot-macos --region --output /tmp/with-ui.png` 与 `appshot-macos --region-rect 100,100,400,300 --output /tmp/no-ui.png` 逐像素对比，应完全一致（2026-10-03 本机实测 sha256 相同、0 个像素差异）',
 }, () => {})
 
 test('手动：全屏模式按目标屏幕捕获（未实现，Post-MVP）', {

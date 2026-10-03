@@ -2,6 +2,15 @@
 
 [English](./CHANGELOG.md) | [简体中文](./CHANGELOG.zh-CN.md)
 
+## [0.6.1](https://github.com/TaurusWood/dsh-plugin-appshot/compare/v0.6.0...v0.6.1) (2026-10-03)
+
+### 🐛 问题修复 (Bug Fixes)
+
+* **macOS 区域框选去掉全屏蒙层**：屏幕保持原样，叠加层只画选框、四角刻度、实时尺寸徽标与顶部提示条
+* **macOS 成图绝不带 UI**：改为在选区窗口仍在场时抓取本进程窗口清单，按窗口身份传入
+  `SCContentFilter(display:excludingWindows:)`，不再依赖 `orderOut` 的提交时序；等待时长 50ms → 120ms
+* **测试**：通过 `APPSHOT_REGION_PRESET` 钩子无头覆盖「选区 UI 在场 → 截取」的真实交互路径
+
 ## [0.6.0](https://github.com/TaurusWood/dsh-plugin-appshot/compare/v0.5.0...v0.6.0) (2026-10-03)
 
 ### ✨ 新特性 (Features)
