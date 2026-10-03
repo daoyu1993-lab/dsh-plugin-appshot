@@ -123,6 +123,12 @@ test('sanitizeMacosConfig 只接受白名单字段（常规边界）', () => {
   assert.deepEqual(patch, { shortcutMode: 'double-cmd', soundEnabled: false })
 })
 
+test('区域框选开关默认启用且可关闭（主流程）', () => {
+  assert.equal(DEFAULT_MACOS_CONFIG.regionShortcutEnabled, true)
+  assert.deepEqual(sanitizeMacosConfig({ regionShortcutEnabled: false }), { regionShortcutEnabled: false })
+  assert.deepEqual(sanitizeMacosConfig({ regionShortcutEnabled: 'no' }), null)
+})
+
 test('配置读写往返且损坏文件回退默认值（主流程 + 边界）', () => {
   const path = join(tempHome, 'plugins', 'appshot', 'config.json')
   assert.equal(saveMacosConfig(path, { ...DEFAULT_MACOS_CONFIG, shortcutMode: 'dual-option', soundEnabled: false }), true)

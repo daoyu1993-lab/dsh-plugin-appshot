@@ -55,15 +55,22 @@ test('--list-windows 输出合法 JSON 窗口数组（主流程）', { skip: nat
   }
 })
 
-test('--cli-capture 成功契约：exit 0 + ok:true + PNG 落盘（主流程）', { skip: nativeGate }, async () => {
+test('--cli-capture 成功契约：exit 0 + ok:true + PNG 落盘（主流程）', { skip: nativeGate }, async (t) => {
   const dir = await makeTempDir('dsh-appshot-native-')
   const output = join(dir, 'shot.png')
   try {
     const result = await runNative(['--cli-capture', '--output', output])
+    const firstLine = parseFirstJsonLine(result.stdout) as NativeSuccessResult | NativeErrorResult
+    // 防自截规则（docs/technical.md）：DSH 在前台时按设计拒绝，此时无法覆盖成功契约
+    if (firstLine.ok === false && firstLine.code === 'DSH_FOREGROUND_IGNORED') {
+      assert.notEqual(result.code, 0, '拒绝路径退出码应非 0')
+      t.skip('当前 DSH 位于前台，防自截规则按设计拒绝；切到其它应用后重跑本用例')
+      return
+    }
     // 当前 PoC 在本机 SIGABRT（exit 134）——红为正确信号，见文件头注释
     assert.equal(result.code, 0, `stderr: ${result.stderr.trim().slice(0, 300)}`)
     assert.equal(result.signal, null)
-    const parsed = parseFirstJsonLine(result.stdout) as NativeSuccessResult
+    const parsed = firstLine as NativeSuccessResult
     assert.equal(parsed.ok, true)
     assert.equal(parsed.mimeType, 'image/png')
     assert.equal(parsed.imagePath, output)

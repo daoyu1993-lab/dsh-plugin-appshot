@@ -92,6 +92,7 @@ export function applyMacos(ctx: Context) {
                 ctx as unknown as Parameters<typeof ingestScreenshot>[0],
                 capture.imagePath,
                 capture.appName,
+                capture.captureKind === 'region' ? 'region' : 'window',
               )
               console.log('[dsh-plugin-appshot] attachment saved:', attachmentRef.attachmentId)
 

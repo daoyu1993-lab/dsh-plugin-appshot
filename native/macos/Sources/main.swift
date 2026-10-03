@@ -5,6 +5,7 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 import AudioToolbox
+import Carbon
 
 // MARK: - NDJSON 契约模型
 
@@ -27,6 +28,8 @@ struct AppshotSuccessResult: Encodable {
     let mimeType: String = "image/png"
     let imagePath: String
     let timestamp: Int64
+    /// 捕获类型：window（前台窗口，默认）或 region（⌘⇧A 框选区域）
+    let captureKind: String
 }
 
 struct AppshotErrorResult: Encodable {
@@ -72,6 +75,8 @@ struct ConfigPayload: Decodable {
     let shortcutMode: String?
     let soundEnabled: Bool?
     let animationEnabled: Bool?
+    /// 是否启用 ⌘⇧A 区域框选（默认启用；与 Chrome 等应用的「搜索标签页」冲突时可关闭）
+    let regionShortcutEnabled: Bool?
 }
 
 struct InboundCommand: Decodable {
@@ -85,6 +90,7 @@ final class AppConfig {
     var soundEnabled: Bool = true
     var animationEnabled: Bool = true
     var shortcutMode: String = "dual-cmd" // "dual-cmd", "double-cmd", "dual-option", "double-option", "dual-control", "double-control", "cmd-option"
+    var regionShortcutEnabled: Bool = true
 
     private init() {}
 
@@ -97,6 +103,9 @@ final class AppConfig {
         }
         if let shortcut = payload.shortcutMode {
             self.shortcutMode = shortcut
+        }
+        if let region = payload.regionShortcutEnabled {
+            self.regionShortcutEnabled = region
         }
     }
 }
@@ -645,7 +654,8 @@ func performCapture(targetWindowId: UInt32? = nil, outputPath: String? = nil, ac
         width: capturedImage.width,
         height: capturedImage.height,
         imagePath: resolvedPath,
-        timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+        timestamp: Int64(Date().timeIntervalSince1970 * 1000),
+        captureKind: "window"
     )
 
     return result
@@ -801,6 +811,363 @@ final class ConfigurableShortcutMonitor {
     }
 }
 
+// MARK: - 区域框选截图 (Region Shot · ⌘⇧A)
+
+/// CLI `--region` 模式下截图完成即退出（守护进程模式不退出）。
+private var regionCLIExitWhenDone = false
+
+/// NSScreen → CGDirectDisplayID（ScreenCaptureKit 的 display 匹配键）。
+func displayID(of screen: NSScreen) -> CGDirectDisplayID? {
+    guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+        return nil
+    }
+    return CGDirectDisplayID(number.uint32Value)
+}
+
+/// 鼠标所在屏幕；多显示器下按目标屏幕捕获，不跨屏拼图。
+func screenContainingMouse() -> NSScreen? {
+    let location = NSEvent.mouseLocation
+    return NSScreen.screens.first { NSMouseInRect(location, $0.frame, false) }
+        ?? NSScreen.main
+        ?? NSScreen.screens.first
+}
+
+/// Cocoa 全局选区（原点主屏左下）→ 目标屏 `SCStreamConfiguration.sourceRect`（原点该屏左上，点）。
+func regionSourceRect(selection: CGRect, on screen: NSScreen) -> CGRect {
+    let localX = selection.minX - screen.frame.minX
+    let localTop = screen.frame.height - (selection.maxY - screen.frame.minY)
+    return CGRect(x: localX, y: localTop, width: selection.width, height: selection.height)
+}
+
+/// Cocoa 全局矩形 → ScreenCaptureKit 全局坐标（主屏左上原点），供闪光/飞入动画复用。
+func screenCaptureGlobalRect(from selection: CGRect) -> CGRect {
+    let primaryHeight = NSScreen.screens.first { $0.frame.origin == .zero }?.frame.height
+        ?? NSScreen.main?.frame.height
+        ?? selection.maxY
+    return CGRect(x: selection.minX, y: primaryHeight - selection.maxY, width: selection.width, height: selection.height)
+}
+
+/// 截取目标屏上的矩形；排除本进程窗口（选区遮罩/闪光/飞入），避免把遮罩拍进图里。
+func captureRegion(screen: NSScreen, sourceRect: CGRect) throws -> CGImage {
+    let content = try fetchShareableContent()
+    let targetDisplay = displayID(of: screen)
+    guard let display = content.displays.first(where: { $0.displayID == targetDisplay }) else {
+        throw NSError(domain: "Appshot", code: -3, userInfo: [NSLocalizedDescriptionKey: "Target display is not shareable"])
+    }
+
+    let ownWindows = content.windows.filter { $0.owningApplication?.processID == getpid() }
+    let filter = SCContentFilter(display: display, excludingWindows: ownWindows)
+
+    let config = SCStreamConfiguration()
+    config.sourceRect = sourceRect
+    let scale = screen.backingScaleFactor
+    config.width = max(1, Int((sourceRect.width * scale).rounded()))
+    config.height = max(1, Int((sourceRect.height * scale).rounded()))
+    config.showsCursor = false
+    config.scalesToFit = false
+
+    return try captureWindow(filter: filter, config: config)
+}
+
+/// 区域截图主流程：权限 → 截取 → 落盘 → 反馈 → 先截后唤。
+func performRegionCapture(
+    selection: CGRect,
+    on screen: NSScreen,
+    outputPath: String?,
+    activateAppId: String?,
+    activatePid: pid_t?,
+    appName: String = "区域截图"
+) -> AppshotSuccessResult? {
+    guard checkScreenCapturePermission() else {
+        outputJSON(AppshotErrorResult(code: "SCREEN_PERMISSION_DENIED", message: "Screen capture permission is required."))
+        return nil
+    }
+    guard selection.width >= 1, selection.height >= 1 else {
+        outputJSON(AppshotErrorResult(code: "REGION_TOO_SMALL", message: "Selected region is too small."))
+        return nil
+    }
+
+    let image: CGImage
+    do {
+        image = try captureRegion(screen: screen, sourceRect: regionSourceRect(selection: selection, on: screen))
+    } catch {
+        outputJSON(AppshotErrorResult(code: "REGION_CAPTURE_FAILED", message: "Region capture failed: \(error.localizedDescription)"))
+        return nil
+    }
+
+    let resolvedPath = outputPath ?? "/tmp/dsh-appshot-\(UUID().uuidString.prefix(8)).png"
+    let (saved, saveErr) = saveCGImageAsPNG(image: image, destinationURL: URL(fileURLWithPath: resolvedPath))
+    guard saved else {
+        outputJSON(AppshotErrorResult(code: "FILE_SAVE_FAILED", message: "Failed to write PNG image to \(resolvedPath): \(saveErr)"))
+        return nil
+    }
+
+    playCaptureSound()
+    showCaptureAnimation(for: screenCaptureGlobalRect(from: selection), image: image, onComplete: {
+        _ = activateApplication(bundleIdentifier: activateAppId, pid: activatePid)
+    })
+
+    return AppshotSuccessResult(
+        appName: appName,
+        windowTitle: nil,
+        windowId: 0,
+        width: image.width,
+        height: image.height,
+        imagePath: resolvedPath,
+        timestamp: Int64(Date().timeIntervalSince1970 * 1000),
+        captureKind: "region"
+    )
+}
+
+/// 框选遮罩视图：整屏压暗 + 拖拽选区（Esc / 右键 / 过小选区取消）。
+final class RegionSelectionView: NSView {
+    private var startPoint: NSPoint?
+    private var currentPoint: NSPoint?
+    var onFinish: ((CGRect?) -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    private func selectionRect() -> CGRect? {
+        guard let start = startPoint, let current = currentPoint else { return nil }
+        return CGRect(
+            x: min(start.x, current.x),
+            y: min(start.y, current.y),
+            width: abs(current.x - start.x),
+            height: abs(current.y - start.y)
+        )
+    }
+
+    private func update(point: NSPoint) {
+        currentPoint = point
+        needsDisplay = true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        startPoint = point
+        update(point: point)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        update(point: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        update(point: convert(event.locationInWindow, from: nil))
+        let rect = selectionRect()
+        if let rect = rect, rect.width >= 4, rect.height >= 4 {
+            onFinish?(rect)
+        } else {
+            onFinish?(nil)
+        }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        onFinish?(nil)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { // Esc
+            onFinish?(nil)
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.black.withAlphaComponent(0.32).setFill()
+        bounds.fill()
+
+        if let rect = selectionRect() {
+            NSColor.clear.setFill()
+            rect.fill(using: .copy) // 挖空选区：未变暗，所见即所截
+
+            NSColor.controlAccentColor.setStroke()
+            let border = NSBezierPath(rect: rect)
+            border.lineWidth = 1.5
+            border.stroke()
+
+            let label = "\(Int(rect.width.rounded())) × \(Int(rect.height.rounded()))"
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
+                .foregroundColor: NSColor.white,
+            ]
+            let labelSize = (label as NSString).size(withAttributes: attributes)
+            let badge = CGRect(
+                x: rect.minX,
+                y: max(rect.minY - labelSize.height - 10, 8),
+                width: labelSize.width + 12,
+                height: labelSize.height + 4
+            )
+            NSColor.black.withAlphaComponent(0.7).setFill()
+            NSBezierPath(roundedRect: badge, xRadius: 4, yRadius: 4).fill()
+            (label as NSString).draw(at: CGPoint(x: badge.minX + 6, y: badge.minY + 2), withAttributes: attributes)
+        }
+
+        let hint = "拖动选择截图区域 · Esc 取消"
+        let hintAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 14, weight: .medium),
+            .foregroundColor: NSColor.white,
+        ]
+        let hintSize = (hint as NSString).size(withAttributes: hintAttributes)
+        let hintOrigin = CGPoint(x: bounds.midX - hintSize.width / 2, y: bounds.maxY - hintSize.height - 60)
+        NSColor.black.withAlphaComponent(0.6).setFill()
+        NSBezierPath(
+            roundedRect: CGRect(
+                x: hintOrigin.x - 14,
+                y: hintOrigin.y - 6,
+                width: hintSize.width + 28,
+                height: hintSize.height + 12
+            ),
+            xRadius: 8,
+            yRadius: 8
+        ).fill()
+        (hint as NSString).draw(at: hintOrigin, withAttributes: hintAttributes)
+    }
+}
+
+/// 区域截图控制器（单实例，⌘⇧A 触发）。
+final class RegionCaptureController {
+    static let shared = RegionCaptureController()
+
+    private var overlayWindow: NSWindow?
+    private var activeScreen: NSScreen?
+    private var activateAppId: String?
+    private var activatePid: pid_t?
+    private var isActive = false
+
+    private init() {}
+
+    func begin(activateAppId: String?, activatePid: pid_t?) {
+        guard !isActive else { return }
+        guard checkScreenCapturePermission() else {
+            outputJSON(AppshotErrorResult(code: "SCREEN_PERMISSION_DENIED", message: "Screen capture permission is required."))
+            return
+        }
+        guard let screen = screenContainingMouse() else {
+            outputJSON(AppshotErrorResult(code: "NO_TARGET_SCREEN", message: "No usable screen for region capture."))
+            return
+        }
+
+        isActive = true
+        self.activateAppId = activateAppId
+        self.activatePid = activatePid
+        activeScreen = screen
+
+        let window = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.level = .screenSaver
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        window.ignoresMouseEvents = false
+        window.acceptsMouseMovedEvents = true
+
+        let view = RegionSelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        view.autoresizingMask = [.width, .height]
+        view.onFinish = { [weak self] rect in
+            self?.finish(viewRect: rect)
+        }
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(view)
+        NSApp.activate(ignoringOtherApps: true)
+        overlayWindow = window
+    }
+
+    private func finish(viewRect: CGRect?) {
+        guard isActive, let screen = activeScreen else { return }
+        isActive = false
+        overlayWindow?.orderOut(nil)
+        overlayWindow = nil
+        activeScreen = nil
+
+        guard let viewRect = viewRect else {
+            if regionCLIExitWhenDone { exit(0) }
+            return
+        }
+
+        let selection = CGRect(
+            x: viewRect.minX + screen.frame.minX,
+            y: viewRect.minY + screen.frame.minY,
+            width: viewRect.width,
+            height: viewRect.height
+        )
+        let appId = activateAppId
+        let appPid = activatePid
+
+        // 遮罩先真正离场再截取（同时也在 SCContentFilter 排除列表里，双保险）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            if let result = performRegionCapture(
+                selection: selection,
+                on: screen,
+                outputPath: nil,
+                activateAppId: appId,
+                activatePid: appPid
+            ) {
+                outputJSON(result)
+            }
+            if regionCLIExitWhenDone { exit(0) }
+        }
+    }
+}
+
+// MARK: - 全局热键 ⌘⇧A（Carbon RegisterEventHotKey，无需辅助功能授权）
+
+private var regionHotKeyRef: EventHotKeyRef?
+private var regionHotKeyHandlerRef: EventHandlerRef?
+private var regionHotKeyAppId: String? = "com.deepseek-harness.desktop"
+private var regionHotKeyPid: pid_t?
+
+private func regionHotKeyCallback(
+    _ callRef: EventHandlerCallRef?,
+    _ event: EventRef?,
+    _ userData: UnsafeMutableRawPointer?
+) -> OSStatus {
+    DispatchQueue.main.async {
+        // 关闭开关时仍拦截按键但不截图：Carbon 热键一旦注册就独占该组合，
+        // 用户可在设置面板关闭，避免与 Chrome「搜索标签页」等冲突。
+        guard AppConfig.shared.regionShortcutEnabled else { return }
+        RegionCaptureController.shared.begin(activateAppId: regionHotKeyAppId, activatePid: regionHotKeyPid)
+    }
+    return noErr
+}
+
+func registerRegionHotKey(activateAppId: String?, activatePid: pid_t?) {
+    regionHotKeyAppId = activateAppId
+    regionHotKeyPid = activatePid
+
+    var eventType = EventTypeSpec(
+        eventClass: OSType(kEventClassKeyboard),
+        eventKind: UInt32(kEventHotKeyPressed)
+    )
+    let handlerStatus = InstallEventHandler(
+        GetApplicationEventTarget(),
+        regionHotKeyCallback,
+        1,
+        &eventType,
+        nil,
+        &regionHotKeyHandlerRef
+    )
+    guard handlerStatus == noErr else {
+        outputJSON(AppshotErrorResult(code: "REGION_HOTKEY_HANDLER_FAILED", message: "InstallEventHandler failed: \(handlerStatus)"))
+        return
+    }
+
+    let hotKeyID = EventHotKeyID(signature: OSType(0x41504854), id: 1) // 'APHT'
+    let status = RegisterEventHotKey(
+        UInt32(kVK_ANSI_A),
+        UInt32(cmdKey | shiftKey),
+        hotKeyID,
+        GetApplicationEventTarget(),
+        0,
+        &regionHotKeyRef
+    )
+    if status != noErr {
+        outputJSON(AppshotErrorResult(code: "REGION_HOTKEY_FAILED", message: "RegisterEventHotKey(⌘⇧A) failed: \(status)"))
+    }
+}
+
 // MARK: - Stdin 监听器
 
 func startStdinListener() {
@@ -844,6 +1211,9 @@ struct AppshotCLI {
               --cli-capture          Capture the current frontmost window (default)
               --daemon               Run as persistent background agent with configurable shortcut monitor
               --window-id <id>       Capture specific window by ID
+              --region               Interactive region selection (drag to select, Esc cancels)
+              --region-rect <x,y,w,h> Capture that region headlessly (points, origin = top-left of the target screen)
+              --screen <index>       Target screen index for --region-rect (default 0 = main display)
               --list-windows         List all on-screen capturable windows
               --output <path>        Custom output PNG file path
               --activate-app <id>    Activate target application bundle ID after capture
@@ -908,6 +1278,9 @@ struct AppshotCLI {
                 return event
             }
 
+            // 区域框选截图：⌘⇧A（Carbon 全局热键，不占用辅助功能权限）
+            registerRegionHotKey(activateAppId: targetActivateApp, activatePid: targetActivatePid)
+
             // 启动 stdin NDJSON 指令监听
             startStdinListener()
 
@@ -934,6 +1307,65 @@ struct AppshotCLI {
         var activatePid: pid_t? = nil
         if let pidIndex = args.firstIndex(of: "--activate-pid"), pidIndex + 1 < args.count {
             activatePid = pid_t(args[pidIndex + 1])
+        }
+
+        // 区域截图（交互框选）：从命令行触发与守护进程相同的遮罩流程
+        if args.contains("--region") {
+            regionCLIExitWhenDone = true
+            RegionCaptureController.shared.begin(activateAppId: activateAppId, activatePid: activatePid)
+            NSApp.run()
+            exit(0)
+        }
+
+        // 区域截图（无界面，供自动化验收）：坐标为目标屏左上原点的点
+        if let rectIndex = args.firstIndex(of: "--region-rect"), rectIndex + 1 < args.count {
+            let parts = args[rectIndex + 1]
+                .split(separator: ",")
+                .compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            guard parts.count == 4 else {
+                outputError(code: "INVALID_REGION_RECT", message: "Usage: --region-rect x,y,width,height")
+            }
+
+            var screenIndex = 0
+            if let sIndex = args.firstIndex(of: "--screen"), sIndex + 1 < args.count, let parsed = Int(args[sIndex + 1]) {
+                screenIndex = parsed
+            }
+            let screens = NSScreen.screens
+            guard screens.indices.contains(screenIndex) else {
+                outputError(code: "SCREEN_NOT_FOUND", message: "Screen index \(screenIndex) out of range (available: \(screens.count))")
+            }
+            let screen = screens[screenIndex]
+
+            guard checkScreenCapturePermission() else {
+                outputError(code: "SCREEN_PERMISSION_DENIED", message: "Screen capture permission is required.")
+            }
+
+            let sourceRect = CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
+            guard sourceRect.width >= 1, sourceRect.height >= 1 else {
+                outputError(code: "REGION_TOO_SMALL", message: "Selected region is too small.")
+            }
+
+            do {
+                let image = try captureRegion(screen: screen, sourceRect: sourceRect)
+                let path = outputPath ?? "/tmp/dsh-appshot-\(UUID().uuidString.prefix(8)).png"
+                let (saved, saveErr) = saveCGImageAsPNG(image: image, destinationURL: URL(fileURLWithPath: path))
+                guard saved else {
+                    outputError(code: "FILE_SAVE_FAILED", message: "Failed to write PNG image to \(path): \(saveErr)")
+                }
+                outputJSON(AppshotSuccessResult(
+                    appName: "区域截图",
+                    windowTitle: nil,
+                    windowId: 0,
+                    width: image.width,
+                    height: image.height,
+                    imagePath: path,
+                    timestamp: Int64(Date().timeIntervalSince1970 * 1000),
+                    captureKind: "region"
+                ))
+                exit(0)
+            } catch {
+                outputError(code: "REGION_CAPTURE_FAILED", message: "Region capture failed: \(error.localizedDescription)")
+            }
         }
 
         if let result = performCapture(targetWindowId: targetWindowId, outputPath: outputPath, activateAppId: activateAppId, activatePid: activatePid) {

@@ -2,6 +2,17 @@
 
 [English](./CHANGELOG.md) | [简体中文](./CHANGELOG.zh-CN.md)
 
+## [0.6.0](https://github.com/TaurusWood/dsh-plugin-appshot/compare/v0.5.0...v0.6.0) (2026-10-03)
+
+### Features
+
+* **macos:** ⌘⇧A region capture — full-screen dimming overlay, drag to select, release to capture; Esc /
+  right-click / too-small selection cancels. Registered with Carbon `RegisterEventHotKey`, so it needs no
+  extra Accessibility grant, and it can be turned off in the settings panel when it collides with another
+  app's shortcut
+* **native:** new `--region` (interactive) and `--region-rect x,y,w,h [--screen N]` (headless) CLI modes;
+  the appshot frame now carries `captureKind: "window" | "region"` and region shots are named `区域截图.png`
+
 ## [0.5.0](https://github.com/TaurusWood/dsh-plugin-appshot/compare/v0.4.2...v0.5.0) (2026-10-03)
 
 ### Features

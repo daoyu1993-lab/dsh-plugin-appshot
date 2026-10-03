@@ -7,6 +7,70 @@ import type { AppshotConfig, WindowsModifierKey } from '../shared/types.ts'
 
 const h = React.createElement
 
+interface ToggleRowProps {
+  title: string
+  description: string
+  checked: boolean
+  disabled: boolean
+  /** 最后一行不画分隔线（面板底部由外层卡片收边）。 */
+  last?: boolean
+  onChange: (next: boolean) => void
+}
+
+/** 设置面板开关行；样式与既有两行保持一致（纯 createElement）。 */
+function ToggleRow(props: ToggleRowProps) {
+  return h('div', {
+    style: {
+      padding: '16px 20px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      ...(props.last === true ? {} : { borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(255, 255, 255, 0.06))' }),
+    },
+  },
+    h('div', null,
+      h('div', { style: { fontWeight: 500, color: 'var(--dsw-alias-label-primary, #f4f4f5)', marginBottom: '2px' } }, props.title),
+      h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #71717a)' } }, props.description),
+    ),
+    h('label', { style: { position: 'relative', display: 'inline-block', width: '42px', height: '24px', cursor: 'pointer' } },
+      h('input', {
+        type: 'checkbox',
+        checked: props.checked,
+        disabled: props.disabled,
+        onChange: (e: React.ChangeEvent<HTMLInputElement>) => props.onChange(e.target.checked),
+        style: { opacity: 0, width: 0, height: 0, margin: 0 },
+      }),
+      h('span', {
+        style: {
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: props.checked ? 'var(--dsw-alias-button-primary-fill, #3b82f6)' : 'var(--dsw-alias-button-tool-bar-fill, #3f3f46)',
+          borderRadius: '24px',
+          transition: 'all 0.2s',
+        },
+      },
+        h('span', {
+          style: {
+            position: 'absolute',
+            content: '""',
+            height: '18px',
+            width: '18px',
+            left: props.checked ? '21px' : '3px',
+            bottom: '3px',
+            background: 'var(--dsw-alias-label-primary-foreground, #ffffff)',
+            borderRadius: '50%',
+            transition: 'all 0.2s',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+          },
+        }),
+      ),
+    ),
+  )
+}
+
 const MODIFIER_LABELS: Record<WindowsModifierKey, string> = {
   lctrl: '左 Ctrl',
   rctrl: '右 Ctrl',
@@ -48,6 +112,7 @@ export function AppshotSettingsSection() {
     windowsHotkeys: { left: 'lctrl', right: 'rctrl' },
     soundEnabled: true,
     animationEnabled: true,
+    regionShortcutEnabled: true,
   })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -67,6 +132,7 @@ export function AppshotSettingsSection() {
             windowsHotkeys: data.windowsHotkeys ?? { left: 'lctrl', right: 'rctrl' },
             soundEnabled: data.soundEnabled ?? true,
             animationEnabled: data.animationEnabled ?? true,
+            regionShortcutEnabled: data.regionShortcutEnabled ?? true,
           })
           setLoading(false)
         }
@@ -262,109 +328,36 @@ export function AppshotSettingsSection() {
       ),
 
       // 项 2: 快门音效
-      h('div', {
-        style: {
-          padding: '16px 20px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          borderBottom: '1px solid var(--dsw-alias-border-l1, rgba(255, 255, 255, 0.06))',
-        },
-      },
-        h('div', null,
-          h('div', { style: { fontWeight: 500, color: 'var(--dsw-alias-label-primary, #f4f4f5)', marginBottom: '2px' } }, '快门提示音'),
-          h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #71717a)' } },
-            '截图成功后播放清脆的快门提示音',
-          ),
-        ),
-        h('label', { style: { position: 'relative', display: 'inline-block', width: '42px', height: '24px', cursor: 'pointer' } },
-          h('input', {
-            type: 'checkbox',
-            checked: config.soundEnabled,
-            disabled: loading || saving,
-            onChange: (e: React.ChangeEvent<HTMLInputElement>) => handleUpdate({ soundEnabled: e.target.checked }),
-            style: { opacity: 0, width: 0, height: 0, margin: 0 },
-          }),
-          h('span', {
-            style: {
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: config.soundEnabled ? 'var(--dsw-alias-button-primary-fill, #3b82f6)' : 'var(--dsw-alias-button-tool-bar-fill, #3f3f46)',
-              borderRadius: '24px',
-              transition: 'all 0.2s',
-            },
-          },
-            h('span', {
-              style: {
-                position: 'absolute',
-                content: '""',
-                height: '18px',
-                width: '18px',
-                left: config.soundEnabled ? '21px' : '3px',
-                bottom: '3px',
-                background: 'var(--dsw-alias-label-primary-foreground, #ffffff)',
-                borderRadius: '50%',
-                transition: 'all 0.2s',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-              },
-            }),
-          ),
-        ),
-      ),
+      h(ToggleRow, {
+        title: '快门提示音',
+        description: '截图成功后播放清脆的快门提示音',
+        checked: config.soundEnabled ?? true,
+        disabled: loading || saving,
+        onChange: (next: boolean) => { void handleUpdate({ soundEnabled: next }) },
+      }),
 
       // 项 3: 闪光动画
-      h('div', {
-        style: {
-          padding: '16px 20px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        },
-      },
-        h('div', null,
-          h('div', { style: { fontWeight: 500, color: 'var(--dsw-alias-label-primary, #f4f4f5)', marginBottom: '2px' } }, '截图动画反馈'),
-        h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #71717a)' } }, '截图成功后被截窗口边框闪一下，缩略图飞向任务栏的 DSH 图标'),
-        ),
-        h('label', { style: { position: 'relative', display: 'inline-block', width: '42px', height: '24px', cursor: 'pointer' } },
-          h('input', {
-            type: 'checkbox',
-            checked: config.animationEnabled,
+      h(ToggleRow, {
+        title: '截图动画反馈',
+        description: '截图成功后被截窗口边框闪一下，缩略图飞向任务栏的 DSH 图标',
+        checked: config.animationEnabled ?? true,
+        disabled: loading || saving,
+        last: isWin,
+        onChange: (next: boolean) => { void handleUpdate({ animationEnabled: next }) },
+      }),
+
+      // 项 4: 区域框选截图（仅 macOS：⌘⇧A 由 native Carbon 热键独占）
+      ...(isWin
+        ? []
+        : [h(ToggleRow, {
+            key: 'region-shortcut',
+            title: '区域框选截图（⌘⇧A）',
+            description: '按 ⌘⇧A 后拖动框选屏幕任意区域，松开即截取并挂入输入框；关闭可避免与浏览器等应用的同名快捷键冲突',
+            checked: config.regionShortcutEnabled ?? true,
             disabled: loading || saving,
-            onChange: (e: React.ChangeEvent<HTMLInputElement>) => handleUpdate({ animationEnabled: e.target.checked }),
-            style: { opacity: 0, width: 0, height: 0, margin: 0 },
-          }),
-          h('span', {
-            style: {
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: config.animationEnabled ? 'var(--dsw-alias-button-primary-fill, #3b82f6)' : 'var(--dsw-alias-button-tool-bar-fill, #3f3f46)',
-              borderRadius: '24px',
-              transition: 'all 0.2s',
-            },
-          },
-            h('span', {
-              style: {
-                position: 'absolute',
-                content: '""',
-                height: '18px',
-                width: '18px',
-                left: config.animationEnabled ? '21px' : '3px',
-                bottom: '3px',
-                background: 'var(--dsw-alias-label-primary-foreground, #ffffff)',
-                borderRadius: '50%',
-                transition: 'all 0.2s',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-              },
-            }),
-          ),
-        ),
-      ),
+            last: true,
+            onChange: (next: boolean) => { void handleUpdate({ regionShortcutEnabled: next }) },
+          })]),
     ),
   )
 }

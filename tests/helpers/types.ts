@@ -91,6 +91,8 @@ export interface NativeSuccessResult {
   mimeType: 'image/png'
   imagePath: string
   timestamp: number
+  /** window = 前台窗口截图；region = ⌘⇧A 框选区域截图。 */
+  captureKind?: 'window' | 'region'
 }
 
 export interface NativeErrorResult {

@@ -77,6 +77,8 @@ DSH 版的「[Codex Appshots](https://developers.openai.com/codex/appshots)」�
 | :---: | :---: |
 | ![触发前](docs/assets/before-double-command.png) | ![触发后](docs/assets/after-double-command.png) |
 
+2. **区域截图（macOS）**：按 **⌘ + ⇧ + A**，屏幕整体压暗后拖动框选任意矩形，松开鼠标即截取该区域并挂入 Composer；按 `Esc`、点右键或选区太小则取消。坐标按目标屏 `sourceRect` 计算，Retina 下图像为选区点数的 2 倍像素。
+
 3. 截图已挂载在当前会话 Composer 草稿中（可点击打开查看大图，或连续触发追加多张）；
 
 ![在 DSH 桌面端查看 Appshot 截图](docs/assets/open-app-shot-in-dsh-desktop.png)
@@ -96,6 +98,7 @@ DSH 版的「[Codex Appshots](https://developers.openai.com/codex/appshots)」�
 **macOS**
 
 - **全局左右 Command 快捷键**：左 ⌘ + 右 ⌘ 组合状态机触发（与 Codex Appshots 同款），带冷却防抖，DSH 在后台/最小化时也能响应；支持在设置中切换为双击 Command 等模式。
+- **⌘⇧A 区域框选截图**：按 ⌘⇧A 后整屏压暗、拖动框选任意区域，松开即截取并挂入输入框（Retina 下按点→像素 2× 换算）；Esc / 右键 / 选区过小取消。用 Carbon 全局热键注册，不额外申请辅助功能权限；与浏览器「搜索标签页」等同名快捷键冲突时可在设置面板关闭。
 - **ScreenCaptureKit 单窗口截图**：过滤透明层、Shadow、Tooltip，保留 Retina 高清分辨率；多显示器下只截目标窗口所在屏幕。
 - **先截后唤（防自截）**：截图完成并落盘后，才由 Native Agent 唤起并置顶 DSH 主窗口，杜绝竞态导致「截到 DSH 自己」；若当前聚焦在 DSH 窗口本身则自动忽略不误截。
 - **SSE 推送挂载**：截图经宿主 `saveImage` 持久化为 DSH Attachment 后，经自建 SSE 通道推送客户端，自动挂到活跃 Session 并聚焦输入框。
@@ -152,8 +155,9 @@ DSH 版的「[Codex Appshots](https://developers.openai.com/codex/appshots)」�
 
 - 支持 **macOS 14+（Apple Silicon / arm64）** 与 **Windows 10 19041+（x64）**（自包含单文件 Agent，无需安装 .NET 运行时）；WebUI 暂不支持（浏览器沙箱无法获取全局快捷键或跨应用置顶）。
 - 窗口唤起仅对 DSH 桌面端（macOS）生效；`dsh web` 下截图仍可入 Composer，但不唤起/置顶窗口；Windows 按「防自截」设计不唤起 DSH，截图静默进入输入框。
-- 不含区域框选、全屏截图、图片标注、OCR 与历史图库管理（均为后续规划）。
-- 快捷键：macOS 默认左右 Command（同时按，可在设置中切换为双击 Command 等）；Windows 默认双 Ctrl，可在 DSH 设置 → 截图捕获 中自定义修饰键组合，并开关快门音与截图动画（配置跨重启保留）。
+- 区域框选（⌘⇧A）当前只覆盖**鼠标所在那块屏幕**，不支持跨屏拖选，也没有全屏/延时模式；标注、OCR 与历史图库仍未实现。
+- 不含图片标注、OCR 与历史图库管理（均为后续规划）。
+- 快捷键：macOS 默认左右 Command（同时按，可在设置中切换为双击 Command 等）；⌘⇧A 为区域截图，可在设置面板关闭；Windows 默认双 Ctrl，可在 DSH 设置 → 截图捕获 中自定义修饰键组合，并开关快门音与截图动画（配置跨重启保留）。
 
 ## 开发
 

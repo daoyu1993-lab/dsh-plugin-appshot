@@ -2,6 +2,15 @@
 
 [English](./CHANGELOG.md) | [简体中文](./CHANGELOG.zh-CN.md)
 
+## [0.6.0](https://github.com/TaurusWood/dsh-plugin-appshot/compare/v0.5.0...v0.6.0) (2026-10-03)
+
+### ✨ 新特性 (Features)
+
+* **macOS 区域框选截图（⌘⇧A）**：整屏压暗 → 拖动框选 → 松开即截取；Esc / 右键 / 选区过小取消。
+  用 Carbon `RegisterEventHotKey` 注册，不额外申请辅助功能权限；与其它应用同名快捷键冲突时可在设置面板关闭
+* **原生 CLI**：新增 `--region`（交互框选）与 `--region-rect x,y,w,h [--screen N]`（无界面，供自动化验收）；
+  appshot 帧新增 `captureKind: "window" | "region"`，区域截图附件命名为 `区域截图.png`
+
 ## [0.5.0](https://github.com/TaurusWood/dsh-plugin-appshot/compare/v0.4.2...v0.5.0) (2026-10-03)
 
 ### ✨ 新特性 (Features)

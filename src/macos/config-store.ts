@@ -32,6 +32,7 @@ export const DEFAULT_MACOS_CONFIG: AppshotConfig = {
   shortcutMode: 'dual-cmd',
   soundEnabled: true,
   animationEnabled: true,
+  regionShortcutEnabled: true,
 }
 
 /** 默认持久化路径：DSH home 下的插件目录；无 DSH_HOME 时回退 ~/.dsh。 */
@@ -52,6 +53,7 @@ export function sanitizeMacosConfig(raw: unknown): AppshotConfig | null {
   }
   if (typeof source.soundEnabled === 'boolean') config.soundEnabled = source.soundEnabled
   if (typeof source.animationEnabled === 'boolean') config.animationEnabled = source.animationEnabled
+  if (typeof source.regionShortcutEnabled === 'boolean') config.regionShortcutEnabled = source.regionShortcutEnabled
   return Object.keys(config).length > 0 ? config : null
 }
 

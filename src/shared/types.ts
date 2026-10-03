@@ -34,6 +34,8 @@ export interface AppshotEventCapture {
   mimeType?: string
   imagePath: string
   timestamp?: number
+  /** 捕获类型：window（前台窗口）或 region（⌘⇧A 框选区域）。 */
+  captureKind?: 'window' | 'region'
 }
 
 export interface AppshotConfig {
@@ -52,6 +54,8 @@ export interface AppshotConfig {
   windowsHotkeys?: WindowsHotkeys
   soundEnabled?: boolean
   animationEnabled?: boolean
+  /** macOS：是否启用 ⌘⇧A 区域框选截图（默认启用）。 */
+  regionShortcutEnabled?: boolean
 }
 
 /** Windows 触发键修饰键池（lctrl=0xA2 / rctrl=0xA3 / lalt=0xA4 / ralt=0xA5 / lshift=0xA0 / rshift=0xA1）；Win 因开始菜单副作用排除。 */
